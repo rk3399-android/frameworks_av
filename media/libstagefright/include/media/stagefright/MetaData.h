@@ -218,6 +218,14 @@ enum {
     kKeyGridRows         = 'grdR', // int32_t, HEIF grid rows
     kKeyGridCols         = 'grdC', // int32_t, HEIF grid columns
     kKeyIccProfile       = 'prof', // raw data, ICC prifile data
+    //add for ffmpeg plugin
+    kKeyExtraData        = 'extr', // raw data extra data
+    kKeyBitsPerRawSample = 'bprs', // int32_t
+    kKeyBlockAlign       = 'blka', // int32_t
+    kKeySampleFormat     = 'splf', // int32_t
+    kKeyWMAVersion       = 'wmav', // int32_t
+    kKeyWMVVersion       = 'wmvv', // int32_t
+    kKeyCodecId          = 'cdci', // int32_t
 };
 
 enum {
@@ -227,6 +235,17 @@ enum {
     kTypeD263        = 'd263',
 };
 
+enum {
+    kTypeWMA         = 0,
+    kTypeWMAPro,
+    kTypeWMALossLess,
+};
+
+enum {
+    kTypeWMVVer_7         = 0,
+    kTypeWMVVer_8,
+    kTypeWMVVer_9,
+};
 class MetaData : public RefBase {
 public:
     MetaData();

@@ -87,11 +87,29 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t device,
                                                          const char *device_address,
                                                          const char *device_name)
 {
-    ALOGV("setDeviceConnectionStateInt() device: 0x%X, state %d, address %s name %s",
--            device, state, device_address, device_name);
+    ALOGD("setDeviceConnectionStateInt() device: 0x%X, state %d, address %s name %s",
+             device, state, device_address, device_name);
 
     // connect/disconnect only 1 device at a time
     if (!audio_is_output_device(device) && !audio_is_input_device(device)) return BAD_VALUE;
+
+#ifdef BOX_STRATEGY
+    /* add by hh@rock-chips.com
+     * this code is from function setDeviceConnectionState in asus\fugu\libaudio\ATVAudioPolicyManager.cpp
+     * If the input device is the remote submix and an address starting with "force=" was
+     * specified, enable "force=1" / disable "force=0" the forced selection of the remote submix
+     * input device over hardware input devices (e.g RemoteControl).
+     */
+    if (device == AUDIO_DEVICE_IN_REMOTE_SUBMIX && device_address) {
+        AudioParameter parameters = AudioParameter(String8(device_address));
+        int forceValue = 0;
+        if (parameters.getInt(String8("force"), forceValue) == OK) {
+            mForceSubmixInputSelection = forceValue != 0;
+        }
+
+        return NO_ERROR;
+    }
+#endif
 
     sp<DeviceDescriptor> devDesc =
             mHwModules.getDeviceDescriptor(device, device_address, device_name);
@@ -751,6 +769,24 @@ sp<IOProfile> AudioPolicyManager::getProfileForDirectOutput(
     return profile;
 }
 
+audio_devices_t getDeviceForBitStream(audio_devices_t device)
+{
+    #define CURRENTDEVICE "persist.audio.currentplayback"
+    #define SPDIF 8
+    #define HDMI 6
+
+    char value[PROPERTY_VALUE_MAX] = "";
+    property_get(CURRENTDEVICE, value, "-1");
+    int current = atoi(value);
+    if (current == SPDIF) {
+        device = AUDIO_DEVICE_OUT_SPDIF;
+    } else {
+        device = AUDIO_DEVICE_OUT_HDMI;
+    }
+
+    return device;
+}
+
 audio_io_handle_t AudioPolicyManager::getOutput(audio_stream_type_t stream,
                                                 uint32_t samplingRate,
                                                 audio_format_t format,
@@ -760,6 +796,13 @@ audio_io_handle_t AudioPolicyManager::getOutput(audio_stream_type_t stream,
 {
     routing_strategy strategy = getStrategy(stream);
     audio_devices_t device = getDeviceForStrategy(strategy, false /*fromCache*/);
+
+#ifdef BOX_STRATEGY
+    if (AUDIO_OUTPUT_FLAG_DIRECT == flags) {
+        device = getDeviceForBitStream(device);
+    }
+#endif
+
     ALOGV("getOutput() device %d, stream %d, samplingRate %d, format %x, channelMask %x, flags %x",
           device, stream, samplingRate, format, channelMask, flags);
 
@@ -840,6 +883,12 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
     if ((attributes.flags & AUDIO_FLAG_HW_AV_SYNC) != 0) {
         flags = (audio_output_flags_t)(flags | AUDIO_OUTPUT_FLAG_HW_AV_SYNC);
     }
+
+#ifdef BOX_STRATEGY
+    if (AUDIO_OUTPUT_FLAG_DIRECT == flags){
+        device = getDeviceForBitStream(device);
+    }
+#endif
 
     ALOGV("getOutputForAttr() device 0x%x, samplingRate %d, format %x, channelMask %x, flags %x",
           device, config->sample_rate, config->format, config->channel_mask, flags);
@@ -949,8 +998,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevice(
     // skip direct output selection if the request can obviously be attached to a mixed output
     // and not explicitly requested
     if (((flags & AUDIO_OUTPUT_FLAG_DIRECT) == 0) &&
-            audio_is_linear_pcm(format) && samplingRate <= SAMPLE_RATE_HZ_MAX &&
-            audio_channel_count_from_out_mask(channelMask) <= 2) {
+            audio_is_linear_pcm(format) && samplingRate <= SAMPLE_RATE_HZ_MAX) {
         goto non_direct_output;
     }
 
@@ -3544,6 +3592,29 @@ sp<AudioSourceDescriptor> AudioPolicyManager::getSourceForStrategyOnOutput(
     return source;
 }
 
+#ifdef BOX_STRATEGY
+#define PROCCARDS                   "proc/asound/cards"
+#define VALUESIZE  80
+
+static inline bool hasSpdif()
+{
+    char line[VALUESIZE];
+    bool ret = false;
+    FILE *fd = fopen(PROCCARDS,"r");
+    if(NULL != fd){
+       memset(line, 0, VALUESIZE);
+       while((fgets(line,VALUESIZE,fd))!= NULL){
+          line[VALUESIZE-1]='\0';
+          if(strstr(line,"SPDIF")||(strstr(line,"spdif"))){
+             ret = true;
+             break;
+          }
+       }
+       fclose(fd);
+    }
+    return ret;
+}
+#endif
 // ----------------------------------------------------------------------------
 // AudioPolicyManager
 // ----------------------------------------------------------------------------
@@ -3597,6 +3668,7 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
 {
     mUidCached = getuid();
     mpClientInterface = clientInterface;
+    mForceSubmixInputSelection = false;
 
     // TODO: remove when legacy conf file is removed. true on devices that use DRC on the
     // DEVICE_CATEGORY_SPEAKER path to boost soft sounds, used to adjust volume curves accordingly.
@@ -3628,6 +3700,77 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
         ALOGE("%s:  Could not get an instance of policy engine", __FUNCTION__);
         return;
     }
+
+#ifdef BOX_STRATEGY
+    sp<DeviceDescriptor>  hdmiOutputDevice = new DeviceDescriptor(AUDIO_DEVICE_OUT_AUX_DIGITAL);
+    sp<DeviceDescriptor>  spdifOutputDevice = new DeviceDescriptor(AUDIO_DEVICE_OUT_SPDIF);
+
+    hdmiOutputDevice->mAddress = "";
+    spdifOutputDevice->mAddress = "";
+    #define CARDSDEFAULT               0
+    #define CARDSTRATEGYSPDIF          1
+    #define CARDSTRATEGYBOTH           9
+    #define CARDSTRATEGYSPDIFPR        8
+    #define CARDSTRATEGYHDMIMUL        7
+    #define CARDSTRATEGYHDMIBS         6
+    #define CARDSTRATEGYBOTHSTR        "9"
+    #define MEDIA_CFG_AUDIO_BYPASS     "media.cfg.audio.bypass"
+    #define MEDIA_CFG_AUDIO_MUL        "media.cfg.audio.mul"
+    #define MEDIA_AUDIO_CURRENTPB      "persist.audio.currentplayback"
+    #define MEDIA_AUDIO_LASTPB "persist.audio.lastsocplayback"
+
+    char value[PROPERTY_VALUE_MAX] = "";
+    int cardStrategy= 0;
+
+    property_get(MEDIA_AUDIO_CURRENTPB, value, "-1");
+    cardStrategy = atoi(value);
+    property_set(MEDIA_CFG_AUDIO_BYPASS, "false");
+    property_set(MEDIA_CFG_AUDIO_MUL, "false");
+
+    ALOGD("cardStrategy = %d , hasSpdif() = %d", cardStrategy,hasSpdif());
+    if(hasSpdif())
+       mAvailableOutputDevices.add(spdifOutputDevice);
+       mAvailableOutputDevices.add(hdmiOutputDevice);
+    switch(cardStrategy){
+    case CARDSDEFAULT:
+         if(hasSpdif())
+            mAvailableOutputDevices.add(spdifOutputDevice);
+         mAvailableOutputDevices.add(hdmiOutputDevice);
+         property_set(MEDIA_CFG_AUDIO_BYPASS, "false");
+         property_set(MEDIA_CFG_AUDIO_MUL, "false");
+         break;
+    case CARDSTRATEGYHDMIMUL:
+         mAvailableOutputDevices.add(hdmiOutputDevice);
+         mAvailableOutputDevices.remove(spdifOutputDevice);
+         property_set(MEDIA_CFG_AUDIO_MUL, "true");
+         break;
+    case CARDSTRATEGYSPDIF:
+    case CARDSTRATEGYSPDIFPR:
+         if(hasSpdif())
+            mAvailableOutputDevices.add(spdifOutputDevice);
+         mAvailableOutputDevices.remove(hdmiOutputDevice);
+         if(cardStrategy==CARDSTRATEGYSPDIFPR)
+            property_set(MEDIA_CFG_AUDIO_BYPASS, "true");
+         else
+            property_set(MEDIA_CFG_AUDIO_BYPASS, "false");
+         break;
+    case CARDSTRATEGYHDMIBS:
+         if(hasSpdif())
+            mAvailableOutputDevices.add(spdifOutputDevice);
+         mAvailableOutputDevices.add(hdmiOutputDevice);
+         property_set(MEDIA_CFG_AUDIO_BYPASS, "true");
+         property_set(MEDIA_CFG_AUDIO_MUL, "false");
+         break;
+    default:
+         if(hasSpdif())
+            mAvailableOutputDevices.add(spdifOutputDevice);
+         mAvailableOutputDevices.add(hdmiOutputDevice);
+         property_set(MEDIA_AUDIO_CURRENTPB, "0");
+         property_set(MEDIA_AUDIO_LASTPB, "0");
+         break;
+    }
+    system("sync");
+#endif
     // Retrieve the Policy Manager Interface
     mEngine = engineInstance->queryInterface<AudioPolicyManagerInterface>();
     if (mEngine == NULL) {
@@ -5334,6 +5477,13 @@ audio_devices_t AudioPolicyManager::getDeviceAndMixForInputSource(audio_source_t
     if (selectedDeviceFromMix != AUDIO_DEVICE_NONE) {
         return selectedDeviceFromMix;
     }
+#ifdef BOX_STRATEGY
+    // if froce using  AUDIO_DEVICE_IN_REMOTE_SUBMIX,then using it
+    if((availableDeviceTypes & AUDIO_DEVICE_IN_REMOTE_SUBMIX) &&
+        mForceSubmixInputSelection){
+        return AUDIO_DEVICE_IN_REMOTE_SUBMIX;
+    }
+#endif
     return getDeviceForInputSource(inputSource);
 }
 

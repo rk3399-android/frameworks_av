@@ -374,9 +374,16 @@ status_t SurfaceMediaSource::read(
 static buffer_handle_t getMediaBufferHandle(MediaBuffer *buffer) {
     // need to convert to char* for pointer arithmetic and then
     // copy the byte stream into our handle
-    buffer_handle_t bufferHandle;
-    memcpy(&bufferHandle, (char*)(buffer->data()) + 4, sizeof(buffer_handle_t));
-    return bufferHandle;
+    //buffer_handle_t bufferHandle;
+    //memcpy(&bufferHandle, (char*)(buffer->data()) + 4, sizeof(buffer_handle_t));
+    //return bufferHandle;
+    VideoNativeMetadata *data = (VideoNativeMetadata *)(buffer)->data();
+    if (data == NULL) {
+        ALOGE("Cannot allocate memory for metadata buffer!");
+        return NULL;
+    }
+    ANativeWindowBuffer *bufferANB = data->pBuffer;
+    return  bufferANB->handle;
 }
 
 void SurfaceMediaSource::signalBufferReturned(MediaBuffer *buffer) {

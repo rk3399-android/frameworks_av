@@ -119,6 +119,8 @@ public:
     status_t initialize(wp<StatusListener> listener,
             ServiceInteractionProxy *proxy = &sHardwareServiceInteractionProxy);
 
+    int updateCameraCount();
+
     /**
      * Retrieve the total number of available cameras. This value may change dynamically as cameras
      * are added or removed.

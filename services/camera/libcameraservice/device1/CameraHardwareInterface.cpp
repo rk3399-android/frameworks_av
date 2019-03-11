@@ -747,13 +747,18 @@ void CameraHardwareInterface::sDataCb(int32_t msg_type,
     ALOGV("%s", __FUNCTION__);
     CameraHardwareInterface *object =
             static_cast<CameraHardwareInterface *>(user);
-    sp<CameraHeapMemory> mem(static_cast<CameraHeapMemory *>(data->handle));
-    if (index >= mem->mNumBufs) {
-        ALOGE("%s: invalid buffer index %d, max allowed is %d", __FUNCTION__,
-             index, mem->mNumBufs);
-        return;
+
+    if(data){
+        sp<CameraHeapMemory> mem(static_cast<CameraHeapMemory *>(data->handle));
+        if (index >= mem->mNumBufs) {
+            ALOGE("%s: invalid buffer index %d, max allowed is %d", __FUNCTION__,
+                index, mem->mNumBufs);
+            return;
+        }
+        object->mDataCb(msg_type, mem->mBuffers[index], metadata, object->mCbUser);
+    }else if(metadata){
+        object->mDataCb(msg_type, NULL, metadata, object->mCbUser);
     }
-    object->mDataCb(msg_type, mem->mBuffers[index], metadata, object->mCbUser);
 }
 
 void CameraHardwareInterface::sDataCbTimestamp(nsecs_t timestamp, int32_t msg_type,

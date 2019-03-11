@@ -48,6 +48,9 @@ LOCAL_SHARED_LIBRARIES := \
     libutils \
     liblog \
     libsoundtrigger
+ifneq ($(filter atv box, $(strip $(TARGET_BOARD_PLATFORM_PRODUCT))), )
+    LOCAL_CFLAGS += -DBOX_STRATEGY
+endif
 
 ifeq ($(USE_CONFIGURABLE_AUDIO_POLICY), 1)
 

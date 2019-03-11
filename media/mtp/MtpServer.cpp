@@ -980,6 +980,11 @@ MtpResponseCode MtpServer::doSendObjectInfo() {
     }
 
     ALOGD("path: %s parent: %d storageID: %08X", (const char*)path, parent, storageID);
+	if(name.getByteCount()>=255)
+	{
+		 ALOGE("File name too long.len=%d,",name.getByteCount());
+		 return MTP_RESPONSE_GENERAL_ERROR;
+	}
     MtpObjectHandle handle = mDatabase->beginSendObject((const char*)path,
             format, parent, storageID, mSendObjectFileSize, modifiedTime);
     if (handle == kInvalidObjectHandle) {

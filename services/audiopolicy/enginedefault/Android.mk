@@ -18,6 +18,10 @@ LOCAL_CFLAGS += \
     -Werror \
     -Wextra \
 
+ifneq ($(filter atv box, $(strip $(TARGET_BOARD_PLATFORM_PRODUCT))), )
+    LOCAL_CFLAGS += -DBOX_STRATEGY
+endif
+
 LOCAL_EXPORT_C_INCLUDE_DIRS := \
     $(audio_policy_engine_includes_common)
 

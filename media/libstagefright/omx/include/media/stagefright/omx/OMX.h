@@ -48,6 +48,7 @@ public:
 
     virtual status_t freeNode(const sp<OMXNodeInstance>& instance);
 
+    virtual size_t getLiveNodeSize();
 protected:
     virtual ~OMX();
 

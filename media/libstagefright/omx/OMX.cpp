@@ -195,4 +195,25 @@ status_t OMX::createInputSurface(
     return OK;
 }
 
+size_t OMX::getLiveNodeSize() {
+    //count video track only
+    Mutex::Autolock autoLock(mLock);
+    size_t nodeSize = mLiveNodes.size();
+    size_t videoNodeSize = 0;
+    for (size_t i = 0; i < nodeSize; i++) {
+        sp<OMXNodeInstance> instance = mLiveNodes.valueAt(i);
+        if (instance == NULL) {
+            continue;
+        }
+
+        const char *nodeName = instance->getNodeName();
+        if (nodeName != NULL && strstr(nodeName, "video") != NULL) {
+            videoNodeSize++;
+        }
+    }
+
+    int pid = getpid();
+    ALOGV("Get live video node num: %zu(v: %zu), pid: %d", nodeSize, videoNodeSize, pid);
+    return videoNodeSize;
+}
 }  // namespace android

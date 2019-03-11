@@ -795,7 +795,8 @@ status_t Harness::testAll() {
         const IOMX::ComponentInfo &info = *it;
         const char *componentName = info.mName.string();
 
-        if (strncmp(componentName, "OMX.google.", 11)) {
+        if (strncmp(componentName, "OMX.google.", 11)
+                || strncmp(componentName, "OMX.ffmpeg.", 11)) {
             continue;
         }
 

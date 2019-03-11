@@ -90,6 +90,8 @@ public:
                 device = AUDIO_DEVICE_OUT_AUX_LINE;
             } else if (device & AUDIO_DEVICE_OUT_SPDIF) {
                 device = AUDIO_DEVICE_OUT_SPDIF;
+            } else if (device & AUDIO_DEVICE_OUT_AUX_DIGITAL){
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
             } else {
                 device = (audio_devices_t)(device & AUDIO_DEVICE_OUT_ALL_A2DP);
             }

@@ -37,6 +37,9 @@ LOCAL_C_INCLUDES := \
     frameworks/av/services/audiopolicy \
     frameworks/av/services/audiopolicy/utilities \
 
+ifneq ($(filter atv box, $(strip $(TARGET_BOARD_PLATFORM_PRODUCT))), )
+      LOCAL_CFLAGS += -DBOX_STRATEGY
+endif
 ifeq ($(USE_XML_AUDIO_POLICY_CONF), 1)
 
 LOCAL_SRC_FILES += src/Serializer.cpp

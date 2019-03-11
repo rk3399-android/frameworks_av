@@ -96,6 +96,13 @@ public:
 
     bool canBeMuted() const { return mCanBeMuted; }
     void clearCurrentVolumeIndex() { mIndexCur.clear(); }
+#ifdef BOX_STRATEGY
+    void setAllDeviceVolumeIndex(int index){
+         for (size_t i = 0; i < mIndexCur.size(); i++) {
+               mIndexCur.editValueAt(i) = index;
+         }
+    }
+#endif
     void addCurrentVolumeIndex(audio_devices_t device, int index) { mIndexCur.add(device, index); }
 
     void setVolumeIndexMin(int volIndexMin) { mIndexMin = volIndexMin; }
@@ -176,6 +183,11 @@ public:
     virtual void addCurrentVolumeIndex(audio_stream_type_t stream, audio_devices_t device, int index)
     {
         editCurvesFor(stream).addCurrentVolumeIndex(device, index);
+#ifdef BOX_STRATEGY
+        if(stream == AUDIO_STREAM_MUSIC){
+            editCurvesFor(stream).setAllDeviceVolumeIndex(index);
+        }
+#endif
     }
     virtual bool canBeMuted(audio_stream_type_t stream) { return getCurvesFor(stream).canBeMuted(); }
 

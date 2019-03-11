@@ -31,6 +31,7 @@
 #include <policy.h>
 #include <utils/String8.h>
 #include <utils/Log.h>
+#include <cutils/properties.h>
 
 namespace android
 {
@@ -538,10 +539,23 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
         }
         int device3 = AUDIO_DEVICE_NONE;
         if (strategy == STRATEGY_MEDIA) {
+            char value[PROPERTY_VALUE_MAX];
+            property_get("persist.audio.output",value, "");
             // ARC, SPDIF and AUX_LINE can co-exist with others.
             device3 = availableOutputDevicesType & AUDIO_DEVICE_OUT_HDMI_ARC;
             device3 |= (availableOutputDevicesType & AUDIO_DEVICE_OUT_SPDIF);
             device3 |= (availableOutputDevicesType & AUDIO_DEVICE_OUT_AUX_LINE);
+#ifdef BOX_STRATEGY
+            int device4 = (AUDIO_DEVICE_OUT_BLUETOOTH_A2DP|
+                           AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES|
+                           AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER|
+                           AUDIO_DEVICE_OUT_USB_DEVICE);
+            if (strstr(value, "both")) {
+                device3 |= (availableOutputDevicesType & AUDIO_DEVICE_OUT_HDMI);
+            } else if (device2 & device4) {
+                device3 = AUDIO_DEVICE_NONE;
+            }
+#endif
         }
 
         device2 |= device3;
@@ -676,6 +690,16 @@ audio_devices_t Engine::getDeviceForInputSource(audio_source_t inputSource) cons
         }
         break;
     case AUDIO_SOURCE_CAMCORDER:
+#ifdef BOX_STRATEGY
+        /*
+         * camera app to record audio which has a usb mic in camera
+         * we using this mic to record audio if no set force device
+         */
+        if ((availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) &&
+            (mForceUse[AUDIO_POLICY_FORCE_FOR_RECORD] == AUDIO_DEVICE_NONE)) {
+            device = AUDIO_DEVICE_IN_USB_DEVICE;
+        }else
+#endif
         if (availableDeviceTypes & AUDIO_DEVICE_IN_BACK_MIC) {
             device = AUDIO_DEVICE_IN_BACK_MIC;
         } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {

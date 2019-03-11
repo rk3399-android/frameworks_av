@@ -574,6 +574,7 @@ protected:
         AudioPolicyMixCollection mPolicyMixes; // list of registered mixes
         audio_io_handle_t mMusicEffectOutput;     // output selected for music effects
 
+        bool     mForceSubmixInputSelection;
 
 #ifdef AUDIO_POLICY_TEST
         Mutex   mLock;

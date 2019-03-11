@@ -437,9 +437,18 @@ void CameraService::onTorchStatusChangedLocked(const String8& cameraId,
 Status CameraService::getNumberOfCameras(int32_t type, int32_t* numCameras) {
     ATRACE_CALL();
     Mutex::Autolock l(mServiceLock);
+    char value[PROPERTY_VALUE_MAX];
     switch (type) {
         case CAMERA_TYPE_BACKWARD_COMPATIBLE:
+            memset(value, 0, sizeof(value));
+            property_get("persist.sys.usbcamera.status", value, "");
+            if((strcmp(value, "add") == 0)||(strcmp(value, "remove") == 0)){
+                //property_set("persist.sys.usbcamera.status", "");
+                mCameraProviderManager->updateCameraCount();
+                mNumberOfNormalCameras = mCameraProviderManager->getAPI1CompatibleCameraCount();
+            }
             *numCameras = mNumberOfNormalCameras;
+            ALOGD("CameraService mNumberOfNormalCameras:%d\n", mNumberOfNormalCameras);
             break;
         case CAMERA_TYPE_ALL:
             *numCameras = mNumberOfCameras;
@@ -1283,6 +1292,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
     binder::Status ret = binder::Status::ok();
 
     String8 clientName8(clientPackageName);
+    property_set("sys.camera.callprocess", clientName8.string());
 
     int originalClientPid = 0;
 

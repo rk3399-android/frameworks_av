@@ -20,6 +20,7 @@
 
 #include "CameraProviderManager.h"
 
+#include <algorithm>
 #include <chrono>
 #include <inttypes.h>
 #include <hidl/ServiceManagement.h>
@@ -73,6 +74,24 @@ status_t CameraProviderManager::initialize(wp<CameraProviderManager::StatusListe
     return OK;
 }
 
+int CameraProviderManager::updateCameraCount(){
+    const std::string& newProvider = kLegacyProviderName;
+    sp<provider::V2_4::ICameraProvider> interface;
+    sp<StatusListener> listener = getStatusListener();
+    ServiceInteractionProxy *proxy = &sHardwareServiceInteractionProxy;
+
+    interface = mServiceProxy->getService(newProvider);
+    status_t res = OK;
+    CameraProviderManager::initialize(listener, proxy);
+    sp<ProviderInfo> providerInfo = mProviders.front();
+    if (providerInfo != NULL) {
+        res = providerInfo->initialize();
+    }
+    if (res != OK) {
+        return res;
+    }
+    return 0;
+}
 int CameraProviderManager::getCameraCount() const {
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
     int count = 0;
@@ -470,6 +489,18 @@ CameraProviderManager::ProviderInfo::ProviderInfo(
     (void) mManager;
 }
 
+std::vector<std::string> findSame(const std::vector<std::string> &nLeft, const std::vector<std::string> &nRight)
+{
+    std::vector<std::string> nResult;
+    for (std::vector<std::string>::const_iterator nIterator = nLeft.begin(); nIterator != nLeft.end(); nIterator++) {
+        if(std::find(nRight.begin(), nRight.end(), *nIterator) != nRight.end()) {
+            nResult.push_back(*nIterator);
+        }
+    }
+
+    return nResult;
+}
+
 status_t CameraProviderManager::ProviderInfo::initialize() {
     status_t res = parseProviderName(mProviderName, &mType, &mId);
     if (res != OK) {
@@ -522,8 +553,30 @@ status_t CameraProviderManager::ProviderInfo::initialize() {
         return mapToStatusT(status);
     }
 
+    std::vector<std::string> initedDevices;
+    if (mDevices.size() > 0) {
+        for (auto& device : mDevices) {
+            initedDevices.push_back(device->mName);
+        }
+        std::vector<std::string> newDevices = findSame(initedDevices, devices);
+
+        // remove invalid device from mDevices
+        std::vector<std::unique_ptr<DeviceInfo>>::iterator it;
+        for (it=mDevices.begin(); it!=mDevices.end();) {
+            if (std::find(newDevices.begin(), newDevices.end(), (*it)->mName) == newDevices.end()) {
+                it=mDevices.erase(it);
+            } else {
+                it++;
+            }
+        }
+
+        initedDevices.swap(newDevices);
+    }
+
     sp<StatusListener> listener = mManager->getStatusListener();
     for (auto& device : devices) {
+        if (std::find(initedDevices.begin(), initedDevices.end(), device) != initedDevices.end())
+            continue; // device was added
         std::string id;
         status_t res = addDevice(device,
                 hardware::camera::common::V1_0::CameraDeviceStatus::PRESENT, &id);
@@ -534,6 +587,8 @@ status_t CameraProviderManager::ProviderInfo::initialize() {
         }
     }
 
+    mUniqueCameraIds.clear();
+    mUniqueAPI1CompatibleCameraIds.clear();
     for (auto& device : mDevices) {
         mUniqueCameraIds.insert(device->mId);
         if (device->isAPI1Compatible()) {

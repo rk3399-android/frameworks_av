@@ -61,6 +61,7 @@
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/ALooperRoster.h>
 #include <media/stagefright/SurfaceUtils.h>
+#include <media/IMediaCodecService.h>
 #include <mediautils/BatteryNotifier.h>
 
 #include <memunreachable/memunreachable.h>
@@ -435,6 +436,7 @@ status_t MediaPlayerService::dump(int fd, const Vector<String16>& args)
     const size_t SIZE = 256;
     char buffer[SIZE];
     String8 result;
+    bool dumpScan = false;
     SortedVector< sp<Client> > clients; //to serialise the mutex unlock & client destruction.
     SortedVector< sp<MediaRecorderClient> > mediaRecorderClients;
 
@@ -544,6 +546,8 @@ status_t MediaPlayerService::dump(int fd, const Vector<String16>& args)
                 dumpMem = true;
             } else if (args[i] == String16("--unreachable")) {
                 unreachableMemory = true;
+            } else if (args[i] == String16("--scanable")) {
+                dumpScan = true;
             }
         }
         if (dumpMem) {
@@ -558,6 +562,16 @@ status_t MediaPlayerService::dump(int fd, const Vector<String16>& args)
             result.append(s.c_str(), s.size());
         }
     }
+
+    //no mLock outside
+    if (dumpScan) {
+        if (hasMediaClient()) {
+            result.append(" MScanable(0)\n");
+        } else {
+            result.append(" MScanable(1)\n");
+        }
+    }
+
     write(fd, result.string(), result.size());
     return NO_ERROR;
 }
@@ -572,6 +586,46 @@ bool MediaPlayerService::hasClient(wp<Client> client)
 {
     Mutex::Autolock lock(mLock);
     return mClients.indexOf(client) != NAME_NOT_FOUND;
+}
+
+bool MediaPlayerService::hasMediaClient()
+{
+    size_t size = getMediaClientSize();
+    return (size > 0);
+}
+
+size_t MediaPlayerService::getMediaClientSize()
+{
+    size_t nodeSize = 0;
+    if (mOMX.get() != NULL) {
+        nodeSize = mOMX->getLiveNodeSize();
+        ALOGV("media server omx nodes: %zu", nodeSize);
+    }
+    // the code below is use lagecy way to get the media.codec service,
+    // we should get the media.codec through treble way,but now we don't
+    // have the interface of getLiveNodeSize() in IOmx,we will fix it up
+    // in times.
+    /*sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> codecbinder = sm->getService(String16("media.codec"));
+    sp<IMediaCodecService> codecservice = interface_cast<IMediaCodecService>(codecbinder);
+    sp<IOMX> mediaCodecOMX = NULL;
+    if (codecservice.get() != NULL) {
+        mediaCodecOMX = codecservice->getOMX();
+    }
+    if (mediaCodecOMX.get() != NULL) {
+        nodeSize += mediaCodecOMX->getLiveNodeSize();
+        ALOGV("media codec omx nodes: %zu", nodeSize);
+    }*/
+
+    Mutex::Autolock lock(mLock);
+    for (size_t i = 0; i < mClients.size(); i++) {
+        sp<Client> c = mClients[i].promote();
+        if (c != NULL && c->isVideoClientAlive()) {
+            nodeSize++;
+        }
+    }
+
+    return nodeSize;
 }
 
 MediaPlayerService::Client::Client(
@@ -590,11 +644,11 @@ MediaPlayerService::Client::Client(
     mUid = uid;
     mRetransmitEndpointValid = false;
     mAudioAttributes = NULL;
-    mListener = new Listener(this);
+    mMaybeVideoAlive = false;
 
 #if CALLBACK_ANTAGONIZER
     ALOGD("create Antagonizer");
-    mAntagonizer = new Antagonizer(mListener);
+    p->setNotifyCallback(client, notifyFunc);
 #endif
 }
 
@@ -628,7 +682,7 @@ void MediaPlayerService::Client::disconnect()
     // and reset the player. We assume the player will serialize
     // access to itself if necessary.
     if (p != 0) {
-        p->setNotifyCallback(0);
+        p->setNotifyCallback(0, 0);
 #if CALLBACK_ANTAGONIZER
         ALOGD("kill Antagonizer");
         mAntagonizer->kill();
@@ -653,7 +707,7 @@ sp<MediaPlayerBase> MediaPlayerService::Client::createPlayer(player_type playerT
         p.clear();
     }
     if (p == NULL) {
-        p = MediaPlayerFactory::createPlayer(playerType, mListener, mPid);
+        p = MediaPlayerFactory::createPlayer(playerType, this, notify, mPid);
     }
 
     if (p != NULL) {
@@ -1083,6 +1137,7 @@ status_t MediaPlayerService::Client::getDefaultBufferingSettings(
 status_t MediaPlayerService::Client::prepareAsync()
 {
     ALOGV("[%d] prepareAsync", mConnId);
+    mMaybeVideoAlive = (mConnectedWindow.get() != NULL);
     sp<MediaPlayerBase> p = getPlayer();
     if (p == 0) return UNKNOWN_ERROR;
     status_t ret = p->prepareAsync();
@@ -1096,6 +1151,8 @@ status_t MediaPlayerService::Client::prepareAsync()
 status_t MediaPlayerService::Client::start()
 {
     ALOGV("[%d] start", mConnId);
+    if (mConnectedWindow.get() == NULL)
+        mMaybeVideoAlive = false;
     sp<MediaPlayerBase> p = getPlayer();
     if (p == 0) return UNKNOWN_ERROR;
     p->setLooping(mLoop);
@@ -1105,6 +1162,7 @@ status_t MediaPlayerService::Client::start()
 status_t MediaPlayerService::Client::stop()
 {
     ALOGV("[%d] stop", mConnId);
+    mMaybeVideoAlive = false;
     sp<MediaPlayerBase> p = getPlayer();
     if (p == 0) return UNKNOWN_ERROR;
     return p->stop();
@@ -1276,6 +1334,7 @@ status_t MediaPlayerService::Client::seekTo(int msec, MediaPlayerSeekMode mode)
 status_t MediaPlayerService::Client::reset()
 {
     ALOGV("[%d] reset", mConnId);
+    mMaybeVideoAlive = false;
     mRetransmitEndpointValid = false;
     sp<MediaPlayerBase> p = getPlayer();
     if (p == 0) return UNKNOWN_ERROR;
@@ -1431,19 +1490,25 @@ status_t MediaPlayerService::Client::getRetransmitEndpoint(
 }
 
 void MediaPlayerService::Client::notify(
-        int msg, int ext1, int ext2, const Parcel *obj)
+        const wp<IMediaPlayer> &listener, int msg, int ext1, int ext2, const Parcel *obj)
 {
+    sp<IMediaPlayer> spListener = listener.promote();
+    if (spListener == NULL) {
+        return;
+    }
+    Client* client = static_cast<Client*>(spListener.get());
+
     sp<IMediaPlayerClient> c;
     sp<Client> nextClient;
     status_t errStartNext = NO_ERROR;
     {
-        Mutex::Autolock l(mLock);
-        c = mClient;
-        if (msg == MEDIA_PLAYBACK_COMPLETE && mNextClient != NULL) {
-            nextClient = mNextClient;
+        Mutex::Autolock l(client->mLock);
+        c = client->mClient;
+        if (msg == MEDIA_PLAYBACK_COMPLETE && client->mNextClient != NULL) {
+            nextClient = client->mNextClient;
 
-            if (mAudioOutput != NULL)
-                mAudioOutput->switchToNextOutput();
+            if (client->mAudioOutput != NULL)
+                client->mAudioOutput->switchToNextOutput();
 
             errStartNext = nextClient->start();
         }
@@ -1469,17 +1534,18 @@ void MediaPlayerService::Client::notify(
         MEDIA_INFO_METADATA_UPDATE == ext1) {
         const media::Metadata::Type metadata_type = ext2;
 
-        if(shouldDropMetadata(metadata_type)) {
+        if(client->shouldDropMetadata(metadata_type)) {
             return;
         }
 
         // Update the list of metadata that have changed. getMetadata
         // also access mMetadataUpdated and clears it.
-        addNewMetadataUpdate(metadata_type);
+        client->addNewMetadataUpdate(metadata_type);
     }
 
+
     if (c != NULL) {
-        ALOGV("[%d] notify (%d, %d, %d)", mConnId, msg, ext1, ext2);
+        ALOGV("[%d] notify (%p, %d, %d, %d)", client->mConnId, spListener.get(), msg, ext1, ext2);
         c->notify(msg, ext1, ext2, obj);
     }
 }
@@ -1537,8 +1603,8 @@ status_t MediaPlayerService::Client::releaseDrm()
 #if CALLBACK_ANTAGONIZER
 const int Antagonizer::interval = 10000; // 10 msecs
 
-Antagonizer::Antagonizer(const sp<MediaPlayerBase::Listener> &listener) :
-    mExit(false), mActive(false), mListener(listener)
+Antagonizer::Antagonizer(notify_callback_f cb, const wp<IMediaPlayer> &client) :
+    mExit(false), mActive(false), mClient(client), mCb(cb)
 {
     createThread(callbackThread, this);
 }

@@ -60,6 +60,7 @@ enum {
     CONFIGURE_VIDEO_TUNNEL_MODE,
     DISPATCH_MESSAGE,
     SET_QUIRKS,
+    GET_LIVE_NODE_SIZE,
 };
 
 class BpOMX : public BpInterface<IOMX> {
@@ -132,6 +133,14 @@ public:
                 reply.readStrongBinder());
 
         return err;
+    }
+
+    virtual size_t getLiveNodeSize() {
+        Parcel data, reply;
+        data.writeInterfaceToken(IOMX::getInterfaceDescriptor());
+        remote()->transact(GET_LIVE_NODE_SIZE, data, &reply);
+
+        return reply.readInt32();
     }
 };
 
@@ -447,6 +456,7 @@ public:
 
         return reply.readInt32();
     }
+
 };
 
 using ::android::hardware::media::omx::V1_0::utils::LWOmxNode;
@@ -630,6 +640,15 @@ status_t BnOMX::onTransact(
                 reply->writeStrongBinder(IInterface::asBinder(bufferSource));
             }
 
+            return NO_ERROR;
+        }
+        
+        case GET_LIVE_NODE_SIZE:
+        {
+            CHECK_OMX_INTERFACE(IOMX, data, reply);
+            size_t size = getLiveNodeSize();
+
+            reply->writeInt32(size);
             return NO_ERROR;
         }
 

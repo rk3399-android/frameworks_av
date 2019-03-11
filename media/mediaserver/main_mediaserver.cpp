@@ -28,11 +28,33 @@
 #include "IcuUtils.h"
 #include "MediaPlayerService.h"
 #include "ResourceManagerService.h"
+#include <dlfcn.h>
 
 using namespace android;
 
+typedef int32_t (*InitPlayerFunc)();
+void InitPlayer()
+{
+    void* handle = dlopen("/system/lib/librkffplayer.so", RTLD_NOW);
+    if (handle == NULL) {
+        handle = dlopen("/vendor/lib/librkffplayer.so", RTLD_NOW);
+        if (handle == NULL)
+            return ;
+    }
+
+    InitPlayerFunc initPlayerFunc = (InitPlayerFunc)dlsym(handle, "player_ext_init");
+    if (initPlayerFunc == NULL) {
+        dlclose(handle);
+        return ;
+    }
+
+    initPlayerFunc();
+    dlclose(handle);
+}
+
 int main(int argc __unused, char **argv __unused)
 {
+    InitPlayer();
     signal(SIGPIPE, SIG_IGN);
 
     sp<ProcessState> proc(ProcessState::self());

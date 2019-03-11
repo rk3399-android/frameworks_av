@@ -5,6 +5,12 @@ LOCAL_PATH:= $(call my-dir)
 #
 
 include $(CLEAR_VARS)
+ifneq ($(filter rk%, $(TARGET_BOARD_PLATFORM)), )
+LOCAL_CFLAGS := -DAVS50
+BUILD_FF_PLAYER := true
+else
+BUILD_FF_PLAYER := false
+endif
 
 LOCAL_SRC_FILES:=               \
     ActivityManager.cpp         \
@@ -16,6 +22,8 @@ LOCAL_SRC_FILES:=               \
     RemoteDisplay.cpp           \
     StagefrightRecorder.cpp     \
     TestPlayerStub.cpp          \
+    MidiFile.cpp                \
+    MidiMetadataRetriever.cpp   \
 
 LOCAL_SHARED_LIBRARIES :=       \
     libbinder                   \
@@ -39,6 +47,7 @@ LOCAL_SHARED_LIBRARIES :=       \
     libutils                    \
     libnativewindow             \
     libhidlbase                 \
+    libsonivox                  \
     android.hardware.media.omx@1.0 \
 
 LOCAL_STATIC_LIBRARIES :=       \
@@ -48,7 +57,8 @@ LOCAL_STATIC_LIBRARIES :=       \
 
 LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libmedia
 
-LOCAL_C_INCLUDES :=                                                 \
+LOCAL_C_INCLUDES :=                                          \
+    frameworks/av/media/libstagefright                       \
     frameworks/av/media/libstagefright/include               \
     frameworks/av/media/libstagefright/rtsp                  \
     frameworks/av/media/libstagefright/wifi-display          \
@@ -59,7 +69,27 @@ LOCAL_C_INCLUDES :=                                                 \
     frameworks/native/include/media/hardware                 \
     external/tremolo/Tremolo                                 \
 
-LOCAL_CFLAGS += -Werror -Wno-error=deprecated-declarations -Wall
+LOCAL_CFLAGS += -Werror -Wno-error=deprecated-declarations -Wall \
+		-Wno-error=unused-function \
+		-Wno-error=unused-parameter \
+		-Wno-error=unused-variable
+
+ifeq ($(strip $(BUILD_FF_PLAYER)),true)
+LOCAL_SRC_FILES += \
+    FFPlayer.cpp
+
+LOCAL_CFLAGS += \
+    -DUSE_FFPLAYER
+
+LOCAL_SHARED_LIBRARIES += \
+    librkffplayer
+
+LOCAL_C_INCLUDES += \
+    frameworks/av/media/libstagefright/libvpu/common             \
+    frameworks/av/media/libstagefright/libvpu/common/include \
+    hardware/rockchip/librkvpu                               \
+    frameworks/av/media/rk_ffplayer
+endif
 
 LOCAL_MODULE:= libmediaplayerservice
 

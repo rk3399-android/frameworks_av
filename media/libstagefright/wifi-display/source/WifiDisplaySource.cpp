@@ -78,11 +78,11 @@ WifiDisplaySource::WifiDisplaySource(
     mSupportedSourceVideoFormats.disableAll();
 
     mSupportedSourceVideoFormats.setNativeResolution(
-            VideoFormats::RESOLUTION_CEA, 5);  // 1280x720 p30
+            VideoFormats::RESOLUTION_CEA, 15);  // 1280x720 p24
 
-    // Enable all resolutions up to 1280x720p30
+    // Enable all resolutions up to 1280x720p24
     mSupportedSourceVideoFormats.enableResolutionUpto(
-            VideoFormats::RESOLUTION_CEA, 5,
+            VideoFormats::RESOLUTION_CEA, 15,
             VideoFormats::PROFILE_CHP,  // Constrained High Profile
             VideoFormats::LEVEL_32);    // Level 3.2
 }
@@ -591,7 +591,7 @@ status_t WifiDisplaySource::sendM1(int32_t sessionID) {
 
 status_t WifiDisplaySource::sendM3(int32_t sessionID) {
     AString body =
-        "wfd_content_protection\r\n"
+        //"wfd_content_protection\r\n"
         "wfd_video_formats\r\n"
         "wfd_audio_codecs\r\n"
         "wfd_client_rtp_ports\r\n";

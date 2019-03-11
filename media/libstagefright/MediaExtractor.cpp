@@ -33,6 +33,8 @@
 
 #include "matroska/MatroskaExtractor.h"
 
+#include "include/ffmExtractor.h"
+
 #include <binder/IServiceManager.h>
 #include <binder/MemoryDealer.h>
 
@@ -169,6 +171,17 @@ sp<MediaExtractor> MediaExtractor::CreateFromService(
     }
 
     MediaExtractor *ret = NULL;
+    AString useFFmpeg;
+    if (meta != NULL) {
+        if (meta->findString("extended-extractor-use",&useFFmpeg)) {
+            ALOGI("using FFmpegExtractor mime = %s", mime);
+            sp<MediaExtractor> ffmExtractor = ffmExtractor::CreateExtractor(source, mime, meta);
+            if (ffmExtractor != NULL) {
+                return ffmExtractor;
+            }
+        }
+    }
+    
     if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_MPEG4)
             || !strcasecmp(mime, "audio/mp4")) {
         ret = new MPEG4Extractor(source);
@@ -231,6 +244,7 @@ bool MediaExtractor::sniff(
         const sp<DataSource> &source, String8 *mimeType, float *confidence, sp<AMessage> *meta) {
     *mimeType = "";
     *confidence = 0.0f;
+    float newConfidence = 0.0f;
     meta->clear();
 
     {
@@ -243,7 +257,6 @@ bool MediaExtractor::sniff(
     for (List<SnifferFunc>::iterator it = gSniffers.begin();
          it != gSniffers.end(); ++it) {
         String8 newMimeType;
-        float newConfidence;
         sp<AMessage> newMeta;
         if ((*it)(source, &newMimeType, &newConfidence, &newMeta)) {
             if (newConfidence > *confidence) {
@@ -275,6 +288,8 @@ void MediaExtractor::RegisterDefaultSniffers() {
     if (gSniffersRegistered) {
         return;
     }
+
+    RegisterSniffer_l(ffmExtractor::SniffFFMPEG);
 
     RegisterSniffer_l(SniffMPEG4);
     RegisterSniffer_l(SniffMatroska);

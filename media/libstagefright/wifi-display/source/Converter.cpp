@@ -201,6 +201,7 @@ status_t Converter::initEncoder() {
     if (!isAudio) {
         sp<AMessage> tmp = mOutputFormat->dup();
         tmp->setInt32("prepend-sps-pps-to-idr-frames", 1);
+        tmp->setInt32("vendor.rkwfd.value",1);
 
         err = mEncoder->configure(
                 tmp,

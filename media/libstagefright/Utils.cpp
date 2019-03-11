@@ -762,6 +762,36 @@ status_t convertMetaDataToMessage(
         if (meta->findInt32(kKeyPcmEncoding, &pcmEncoding)) {
             msg->setInt32("pcm-encoding", pcmEncoding);
         }
+        int32_t blockAlign;
+        if (meta->findInt32(kKeyBlockAlign, &blockAlign)) {
+           msg->setInt32("block-align", blockAlign);
+        }
+
+        int32_t wmaVersion;
+        if (meta->findInt32(kKeyWMAVersion, &wmaVersion)) {
+            if (wmaVersion == kTypeWMA) {
+                msg->setInt32("wma-format", OMX_AUDIO_WMAFormat7);
+            } else if (wmaVersion == kTypeWMAPro) {
+                msg->setInt32("wma-format", OMX_AUDIO_WMAFormat8);
+            } else if (wmaVersion == kTypeWMALossLess) {
+                msg->setInt32("wma-format", OMX_AUDIO_WMAFormat9);
+            }
+        }
+
+        int32_t codecId;
+        if (meta->findInt32(kKeyCodecId, &codecId)) {
+            msg->setInt32("ffmpeg-codec-id", codecId);
+        }
+
+        int32_t sampleFormat;
+        if (meta->findInt32(kKeySampleFormat, &sampleFormat)) {
+            msg->setInt32("sample-format", sampleFormat);
+        }
+
+        int32_t bitPerSample = 0;
+        if (meta->findInt32(kKeyBitsPerRawSample, &bitPerSample)) {
+            msg->setInt32("bit-per-sample", bitPerSample);
+        }
     }
 
     int32_t maxInputSize;
@@ -1098,6 +1128,17 @@ status_t convertMetaDataToMessage(
         parseVp9ProfileLevelFromCsd(buffer, msg);
     }
 
+    if (meta->findData(kKeyExtraData, &type, &data, &size)) {
+        sp<ABuffer> buffer = new (std::nothrow) ABuffer(size);
+        if (buffer.get() == NULL || buffer->base() == NULL) {
+            return NO_MEMORY;
+        }
+        memcpy(buffer->data(), data, size);
+
+        buffer->meta()->setInt32("csd", true);
+        buffer->meta()->setInt64("timeUs", 0);
+        msg->setBuffer("csd-0", buffer);
+    }
     // TODO expose "crypto-key"/kKeyCryptoKey through public api
     if (meta->findData(kKeyCryptoKey, &type, &data, &size)) {
         sp<ABuffer> buffer = new (std::nothrow) ABuffer(size);
@@ -1568,6 +1609,7 @@ static const struct mime_conv_t mimeLookup[] = {
     { MEDIA_MIMETYPE_AUDIO_OPUS,        AUDIO_FORMAT_OPUS},
     { MEDIA_MIMETYPE_AUDIO_AC3,         AUDIO_FORMAT_AC3},
     { MEDIA_MIMETYPE_AUDIO_FLAC,        AUDIO_FORMAT_FLAC},
+    { MEDIA_MIMETYPE_AUDIO_DTS,         AUDIO_FORMAT_DTS},
     { 0, AUDIO_FORMAT_INVALID }
 };
 

@@ -108,6 +108,9 @@ struct OMXNodeInstance : public BnOMXNode {
     }
 
     status_t dispatchMessage(const omx_message &msg) override;
+    const char* getNodeName() {
+        return mNodeName.string();
+    }
 
     // handles messages and removes them from the list
     void onMessages(std::list<omx_message> &messages);
@@ -132,6 +135,7 @@ private:
     SortedVector<OMX_INDEXTYPE> mProhibitedExtensions;
     bool mIsSecure;
     uint32_t mQuirks;
+    String8 mNodeName;
 
     // Lock only covers mOMXBufferSource and mOMXOutputListener.  We can't always
     // use mLock because of rare instances where we'd end up locking it recursively.

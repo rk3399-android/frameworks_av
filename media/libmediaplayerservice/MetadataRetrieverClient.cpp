@@ -39,7 +39,12 @@
 #include <private/media/VideoFrame.h>
 #include "MetadataRetrieverClient.h"
 #include "StagefrightMetadataRetriever.h"
+#include "MidiMetadataRetriever.h"
 #include "MediaPlayerFactory.h"
+
+#ifdef USE_FFPLAYER
+#include "RkMetadataRetriever.h"
+#endif
 
 namespace android {
 
@@ -84,17 +89,43 @@ void MetadataRetrieverClient::disconnect()
 static sp<MediaMetadataRetrieverBase> createRetriever(player_type playerType)
 {
     sp<MediaMetadataRetrieverBase> p;
+    char value[PROPERTY_VALUE_MAX];
     switch (playerType) {
         case STAGEFRIGHT_PLAYER:
+        case FF_PLAYER:
         case NU_PLAYER:
         {
-            p = new StagefrightMetadataRetriever;
+            #ifdef USE_FFPLAYER
+                if(property_get("cts_gts.status", value, NULL)
+                    && !strcasecmp("true", value)){
+                    ALOGD("Create Instance of StagefrightMetaDataRetriever");
+                    p = new StagefrightMetadataRetriever;
+                } else {
+                    ALOGD("Create Instance of RockMetaDataRetriever");
+                    p =  new RK_MetadataRetriever;
+                }
+            #else
+                ALOGD("Create Instance of StagefrightMetaDataRetriever");
+                p = new StagefrightMetadataRetriever;
+            #endif
             break;
         }
         default:
             // TODO:
             // support for TEST_PLAYER
-            ALOGE("player type %d is not supported",  playerType);
+            #ifdef USE_FFPLAYER
+                if(property_get("cts_gts.status", value, NULL)
+                    && !strcasecmp("true", value)){
+                    ALOGD("Create Instance of StagefrightMetaDataRetriever");
+                    p = new StagefrightMetadataRetriever;
+                } else {
+                    ALOGD("Create Instance of RockMetaDataRetriever");
+                    p =  new RK_MetadataRetriever;
+                }
+
+            #else
+                ALOGE("player type %d is not supported",  playerType);
+            #endif
             break;
     }
     if (p == NULL) {
@@ -165,7 +196,15 @@ status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t 
                                           offset,
                                           length);
     ALOGV("player type = %d", playerType);
-    sp<MediaMetadataRetrieverBase> p = createRetriever(playerType);
+    sp<MediaMetadataRetrieverBase> p;
+    if (strcasestr(nameForFd(fd).c_str(),"mp3")) {
+        p = new StagefrightMetadataRetriever;
+    } else if (strcasestr(nameForFd(fd).c_str(),".mid") || strcasestr(nameForFd(fd).c_str(),".midi")) {
+        p = new MidiMetadataRetriever();
+    } else {
+        p = createRetriever(playerType);
+    }
+
     if (p == NULL) {
         return NO_INIT;
     }

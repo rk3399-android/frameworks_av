@@ -51,7 +51,7 @@ class MediaRecorderClient;
 #if CALLBACK_ANTAGONIZER
 class Antagonizer {
 public:
-    Antagonizer(const sp<MediaPlayerBase::Listener> &listener);
+    Antagonizer(notify_callback_f cb, const wp<IMediaPlayer> &client);
     void start() { mActive = true; }
     void stop() { mActive = false; }
     void kill();
@@ -59,11 +59,12 @@ private:
     static const int interval;
     Antagonizer();
     static int callbackThread(void* cookie);
-    Mutex                         mLock;
-    Condition                     mCondition;
-    bool                          mExit;
-    bool                          mActive;
-    sp<MediaPlayerBase::Listener> mListener;
+    Mutex               mLock;
+    Condition           mCondition;
+    bool                mExit;
+    bool                mActive;
+    wp<IMediaPlayer>    mClient;
+    notify_callback_f   mCb;
 };
 #endif
 
@@ -235,6 +236,8 @@ public:
 
             void                removeClient(const wp<Client>& client);
             bool                hasClient(wp<Client> client);
+    virtual bool                hasMediaClient();
+    virtual size_t              getMediaClientSize();
 
     enum {
         MEDIASERVER_PROCESS_DEATH = 0,
@@ -363,12 +366,14 @@ private:
         status_t                setDataSource_post(const sp<MediaPlayerBase>& p,
                                                    status_t status);
 
-                void            notify(int msg, int ext1, int ext2, const Parcel *obj);
+        static  void            notify(const wp<IMediaPlayer> &cookie, int msg,
+                                       int ext1, int ext2, const Parcel *obj);
 
                 pid_t           pid() const { return mPid; }
         virtual status_t        dump(int fd, const Vector<String16>& args);
 
                 audio_session_t getAudioSessionId() { return mAudioSessionId; }
+                bool            isVideoClientAlive() { return mMaybeVideoAlive; }
         // Modular DRM
         virtual status_t prepareDrm(const uint8_t uuid[16], const Vector<uint8_t>& drmSessionId);
         virtual status_t releaseDrm();
@@ -441,7 +446,7 @@ private:
             virtual void notify(int msg, int ext1, int ext2, const Parcel *obj) {
                 sp<Client> client = mClient.promote();
                 if (client != NULL) {
-                    client->notify(msg, ext1, ext2, obj);
+                    client->notify(mClient, msg, ext1, ext2, obj);
                 }
             }
         private:
@@ -479,6 +484,7 @@ private:
 
         sp<ServiceDeathNotifier> mExtractorDeathListener;
         sp<ServiceDeathNotifier> mCodecDeathListener;
+        bool mMaybeVideoAlive;
 #if CALLBACK_ANTAGONIZER
                     Antagonizer*                  mAntagonizer;
 #endif

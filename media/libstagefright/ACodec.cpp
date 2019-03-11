@@ -54,12 +54,14 @@
 #include <media/openmax/OMX_Component.h>
 #include <media/openmax/OMX_IndexExt.h>
 #include <media/openmax/OMX_AsString.h>
+#include <media/openmax/OMX_FFMPEG_Extn.h>
 
 #include "include/avc_utils.h"
 #include "include/ACodecBufferChannel.h"
 #include "include/DataConverter.h"
 #include "include/SecureBuffer.h"
 #include "include/SharedMemoryBuffer.h"
+#include <cutils/properties.h>
 #include <media/stagefright/omx/OMXUtils.h>
 
 namespace android {
@@ -1798,6 +1800,31 @@ status_t ACodec::configureCodec(
         }
     }
 
+    int32_t bRkWFD = 0;
+    typedef PrependSPSPPSToIDRFramesParams ROCKCHIP_OMX_WFD;
+    if(encoder && msg->findInt32("vendor.rkwfd.value", &bRkWFD) && bRkWFD!=0) {
+        ALOGV("vendor.rkwfd.value : %d",bRkWFD);
+        OMX_INDEXTYPE index;
+        err = mOMXNode->getExtensionIndex(
+                "OMX.rk.index.encoder.wifidisplay", &index);
+
+        if (err == OK) {
+            ALOGV("mOMXNode getExtensionIndex wifidisplay succed");
+            ROCKCHIP_OMX_WFD params;
+            InitOMXParams(&params);
+            params.bEnable = OMX_TRUE;
+
+            err = mOMXNode->setParameter(index, &params, sizeof(params));
+            if(err == OK)
+                ALOGV("mOMXNode setParameter wifidisplay succed");
+        }
+
+        if (err != OK) {
+            ALOGE("Encoder wifidisplay flag configure failed (err %d)", err);
+            return err;
+        }
+    }
+
     // Only enable metadata mode on encoder output if encoder can prepend
     // sps/pps to idr frames, since in metadata mode the bitstream is in an
     // opaque handle, to which we don't have access.
@@ -2017,7 +2044,8 @@ status_t ACodec::configureCodec(
     if (video) {
         // determine need for software renderer
         bool usingSwRenderer = false;
-        if (haveNativeWindow && mComponentName.startsWith("OMX.google.")) {
+        if (haveNativeWindow && 
+               (mComponentName.startsWith("OMX.google.") || mComponentName.startsWith("OMX.ffmpeg."))) {
             usingSwRenderer = true;
             haveNativeWindow = false;
             (void)setPortMode(kPortIndexOutput, IOMX::kPortModePresetByteBuffer);
@@ -2227,6 +2255,75 @@ status_t ACodec::configureCodec(
         } else {
             err = setupEAC3Codec(encoder, numChannels, sampleRate);
         }
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_RA)) {
+        int32_t numChannels = 0;
+        int32_t sampleRate = 0;
+        int32_t blockAlign = 0;
+        if (!msg->findInt32("channel-count", &numChannels)
+                || !msg->findInt32("sample-rate", &sampleRate)) {
+            err = INVALID_OPERATION;
+        } else if (!msg->findInt32("block-align", &blockAlign)) {
+            blockAlign = 0;
+        }
+        err = setupRACodec(encoder, numChannels, sampleRate, blockAlign);
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_WMA)) {
+        int32_t numChannels = 0;
+        int32_t sampleRate = 0;
+        int32_t blockAlign = 0;
+        int32_t bitRate = 0;
+        OMX_AUDIO_WMAFORMATTYPE formatType = OMX_AUDIO_WMAFormatUnused;
+        if (!msg->findInt32("channel-count", &numChannels)
+                || !msg->findInt32("sample-rate", &sampleRate)) {
+            err = INVALID_OPERATION;
+        } else if (!msg->findInt32("block-align", &blockAlign)) {
+            blockAlign = 0;
+        }
+
+        if (!msg->findInt32("wma-format", (int32_t *)&formatType)) {
+            formatType = OMX_AUDIO_WMAFormat7;
+        }
+
+        if (!msg->findInt32("bitrate", &bitRate)) {
+            bitRate = 0;
+        }
+        err = setupWMACodec(encoder, numChannels, sampleRate, blockAlign, formatType, bitRate);
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_WAV)) {
+        int32_t numChannels = 0;
+        int32_t sampleRate = 0;
+        int32_t blockAlign = 0;
+        int32_t bitRate = 0;
+        int32_t codecId = 0;
+        int32_t sampleFormat = 0;
+        int32_t bitPerSample = 0;
+
+        if (!msg->findInt32("channel-count", &numChannels)
+                || !msg->findInt32("sample-rate", &sampleRate)) {
+            err = INVALID_OPERATION;
+        } else if (!msg->findInt32("block-align", &blockAlign)) {
+            blockAlign = 0;
+        }
+
+        if (!msg->findInt32("bitrate", &bitRate)) {
+            bitRate = 0;
+        }
+
+        if (!msg->findInt32("ffmpeg-codec-id", &codecId)) {
+            codecId = 0;
+        }
+
+        if (!msg->findInt32("sample-format", &sampleFormat)) {
+            sampleFormat = 0;
+        }
+
+        if (!msg->findInt32("bit-per-sample", &bitPerSample)) {
+            bitPerSample = 0;
+        }
+
+        err = setupFfmpegCodec(
+                encoder, numChannels, sampleRate, 
+                blockAlign, bitRate, codecId,
+                sampleFormat, bitPerSample);
+
     }
 
     if (err != OK) {
@@ -2868,6 +2965,112 @@ status_t ACodec::setupEAC3Codec(
             (OMX_INDEXTYPE)OMX_IndexParamAudioAndroidEac3, &def, sizeof(def));
 }
 
+status_t ACodec::setupRACodec(
+        bool encoder, int32_t numChannels, int32_t sampleRate, int32_t blockAlign) {
+    status_t err = setupRawAudioFormat(
+            encoder ? kPortIndexInput : kPortIndexOutput, sampleRate, numChannels);
+
+    if (err != OK) {
+        return err;
+    }
+
+    if (encoder) {
+        ALOGW("RA encoding is not supported.");
+        return INVALID_OPERATION;
+    }
+
+    OMX_AUDIO_PARAM_RATYPE def;
+    InitOMXParams(&def);
+    def.nPortIndex = kPortIndexInput;
+
+    err = mOMXNode->getParameter(
+             OMX_IndexParamAudioRa, &def, sizeof(def));
+
+    if (err != OK) {
+        return err;
+    }
+
+    def.nChannels = numChannels;
+    def.nSamplingRate = sampleRate;
+    def.nNumRegions = blockAlign;
+
+    return mOMXNode->setParameter(
+            OMX_IndexParamAudioRa, &def, sizeof(def));
+}
+
+status_t ACodec::setupWMACodec(
+        bool encoder, int32_t numChannels, int32_t sampleRate, 
+        int32_t blockAlign, OMX_AUDIO_WMAFORMATTYPE type, int32_t bitRate) {
+    status_t err = setupRawAudioFormat(
+            encoder ? kPortIndexInput : kPortIndexOutput, sampleRate, numChannels);
+
+    if (err != OK) {
+        return err;
+    }
+
+    if (encoder) {
+        ALOGW("WMA encoding is not supported.");
+        return INVALID_OPERATION;
+    }
+
+    OMX_AUDIO_PARAM_WMATYPE def;
+    InitOMXParams(&def);
+    def.nPortIndex = kPortIndexInput;
+
+    err = mOMXNode->getParameter(
+             OMX_IndexParamAudioWma, &def, sizeof(def));
+
+    if (err != OK) {
+        return err;
+    }
+    def.eFormat = type;
+    def.nChannels = numChannels;
+    def.nBitRate = bitRate;
+    def.nSamplingRate = sampleRate;
+    def.nBlockAlign = blockAlign;
+
+    return mOMXNode->setParameter(
+            OMX_IndexParamAudioWma, &def, sizeof(def));
+}
+
+status_t ACodec::setupFfmpegCodec(
+        bool encoder, int32_t numChannels, int32_t sampleRate, 
+        int32_t blockAlign, int32_t bitRate, int32_t codecId,
+        int32_t sampleFormat, int32_t bitPerSample) {
+    status_t err = setupRawAudioFormat(
+            encoder ? kPortIndexInput : kPortIndexOutput, sampleRate, numChannels);
+
+    if (err != OK) {
+        return err;
+    }
+
+    if (encoder) {
+        ALOGW("WMA encoding is not supported.");
+        return INVALID_OPERATION;
+    }
+
+    OMX_AUDIO_PARAM_FFMPEGTYPE def;
+    InitOMXParams(&def);
+    def.nPortIndex = kPortIndexInput;
+
+    err = mOMXNode->getParameter(
+             (OMX_INDEXTYPE)OMX_IndexParamAudioFFmpeg, &def, sizeof(def));
+
+    if (err != OK) {
+        return err;
+    }
+    def.eCodecId = codecId;
+    def.eSampleFormat = sampleFormat;
+    def.nChannels = numChannels;
+    def.nBitRate = bitRate;
+    def.nSampleRate = sampleRate;
+    def.nBlockAlign = blockAlign;
+    def.nBitsPerSample = bitPerSample;
+
+    return mOMXNode->setParameter(
+            (OMX_INDEXTYPE)OMX_IndexParamAudioFFmpeg, &def, sizeof(def));
+}
+
 static OMX_AUDIO_AMRBANDMODETYPE pickModeFromBitRate(
         bool isAMRWB, int32_t bps) {
     if (isAMRWB) {
@@ -3218,6 +3421,10 @@ static const struct VideoCodingMapEntry {
     { MEDIA_MIMETYPE_VIDEO_MPEG2, OMX_VIDEO_CodingMPEG2 },
     { MEDIA_MIMETYPE_VIDEO_VP8, OMX_VIDEO_CodingVP8 },
     { MEDIA_MIMETYPE_VIDEO_VP9, OMX_VIDEO_CodingVP9 },
+    { MEDIA_MIMETYPE_VIDEO_FLV, (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingFLV1 },
+    { MEDIA_MIMETYPE_VIDEO_VC1, (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingVC1 },
+    { MEDIA_MIMETYPE_VIDEO_REALVIDEO, OMX_VIDEO_CodingRV },
+    { MEDIA_MIMETYPE_VIDEO_WMV3, OMX_VIDEO_CodingWMV },
     { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, OMX_VIDEO_CodingDolbyVision },
 };
 
@@ -5197,6 +5404,152 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                     notify->setInt32("sample-rate", params.nSamplingRate);
                     break;
                 }
+                //add from ffmpeg
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingDTS:
+                {
+                    OMX_AUDIO_PARAM_DTSTYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioDts, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_DTS);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    break; 
+                }
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingMP2:
+                {
+                    OMX_AUDIO_PARAM_MP2TYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioMp2, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_MPEG_LAYER_II);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSampleRate);
+                    break;
+                }
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingAPE:
+                {
+                    OMX_AUDIO_PARAM_APETYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioApe, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_APE);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    break;
+                }
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingAC3:
+                {
+                    OMX_AUDIO_PARAM_AC3TYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioAc3, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_AC3);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    break;
+                }
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingALAC:
+                {
+                    OMX_AUDIO_PARAM_ALACTYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioAlac, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_ALAC);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    break;
+                }
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingRA:
+                {
+                    OMX_AUDIO_PARAM_RATYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                OMX_IndexParamAudioRa, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_RA);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    notify->setInt32("block-align", params.nNumRegions);
+                    break;
+                } 
+                case (OMX_FFMPEG_AUDIO_CODINGTYPE)OMX_AUDIO_CodingWMA:
+                {
+                    OMX_AUDIO_PARAM_WMATYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                OMX_IndexParamAudioWma, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_WMA);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSamplingRate);
+                    notify->setInt32("block-align", params.nBlockAlign);
+                    notify->setInt32("bitrate", params.nBitRate);
+                    notify->setInt32("wma-format", params.eFormat);
+                    break;
+                } 
+                case OMX_AUDIO_CodingADPCM:
+                {
+                    OMX_AUDIO_PARAM_FFMPEGTYPE params;
+                    InitOMXParams(&params);
+                    params.nPortIndex = portIndex;
+
+                    err = mOMXNode->getParameter(
+                                (OMX_INDEXTYPE)OMX_IndexParamAudioFFmpeg, &params, sizeof(params));
+                    if (err != OK) {
+                        return err;
+                    }
+
+                    notify->setString("mime", MEDIA_MIMETYPE_AUDIO_WAV);
+                    notify->setInt32("channel-count", params.nChannels);
+                    notify->setInt32("sample-rate", params.nSampleRate);
+                    notify->setInt32("block-align", params.nBlockAlign);
+                    notify->setInt32("bitrate", params.nBitRate);
+                    notify->setInt32("ffmpeg-codec-id", params.eCodecId);
+                    notify->setInt32("sample-format", params.eSampleFormat);
+                    notify->setInt32("bit-per-sample", params.nBitsPerSample);
+                    break;
+                } 
 
                 default:
                     ALOGE("Unsupported audio coding: %s(%d)\n",
@@ -6351,6 +6704,15 @@ bool ACodec::UninitializedState::onAllocateComponent(const sp<AMessage> &msg) {
 
     AString componentName;
     int32_t encoder = false;
+    char prop_value[128] = {};
+
+    property_get("cts_gts.media.gts",prop_value,NULL);
+    msg->findString("componentName", &componentName);
+    if(!strcmp(componentName.c_str(),"OMX.google.h264.decoder") && strstr(prop_value,"true")) {
+        msg->setString("componentName", "OMX.rk.video_decoder.avc");
+        ALOGD("h264softdec to h264haldec when cts_gts.media.gts is true");
+    }
+
     if (msg->findString("componentName", &componentName)) {
         sp<IMediaCodecList> list = MediaCodecList::getInstance();
         if (list == nullptr) {

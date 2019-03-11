@@ -23,6 +23,8 @@
 
 #include <sys/stat.h>
 #include <dirent.h>
+#include <binder/IServiceManager.h>
+#include <media/IMediaPlayerService.h>
 
 namespace android {
 
@@ -158,7 +160,14 @@ MediaScanResult MediaScanner::doProcessDirectory(
     }
 
     MediaScanResult result = MEDIA_SCAN_RESULT_OK;
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> playerbinder = sm->getService(String16("media.player"));
+    sp<IMediaPlayerService> mediaservice = interface_cast<IMediaPlayerService>(playerbinder);
     while ((entry = readdir(dir))) {
+
+        while(mediaservice->hasMediaClient()){
+            sleep(1);
+        }
         if (doProcessDirectoryEntry(path, pathRemaining, client, noMedia, entry, fileSpot)
                 == MEDIA_SCAN_RESULT_ERROR) {
             result = MEDIA_SCAN_RESULT_ERROR;
@@ -210,20 +219,33 @@ MediaScanResult MediaScanner::doProcessDirectoryEntry(
             childNoMedia = true;
 
         // report the directory to the client
-        if (stat(path, &statbuf) == 0) {
-            status_t status = client.scanFile(path, statbuf.st_mtime, 0,
-                    true /*isDirectory*/, childNoMedia);
-            if (status) {
+        if(!isBDDirectory(path)){
+            if (stat(path, &statbuf) == 0) {
+                status_t status = client.scanFile(path, statbuf.st_mtime, 0,
+                        true /*isDirectory*/, childNoMedia);
+                if (status) {
+                    return MEDIA_SCAN_RESULT_ERROR;
+                }
+            }
+
+            // and now process its contents
+            strcat(fileSpot, "/");
+            MediaScanResult result = doProcessDirectory(path, pathRemaining - nameLength - 1,
+                    client, childNoMedia);
+            if (result == MEDIA_SCAN_RESULT_ERROR) {
                 return MEDIA_SCAN_RESULT_ERROR;
             }
         }
-
-        // and now process its contents
-        strcat(fileSpot, "/");
-        MediaScanResult result = doProcessDirectory(path, pathRemaining - nameLength - 1,
-                client, childNoMedia);
-        if (result == MEDIA_SCAN_RESULT_ERROR) {
-            return MEDIA_SCAN_RESULT_ERROR;
+        else
+        {
+            if (stat(path, &statbuf) == 0)
+            {
+                status_t status = client.scanBDDirectory(path, statbuf.st_mtime, statbuf.st_size);
+                if (status) 
+                {
+                    return MEDIA_SCAN_RESULT_ERROR;
+                }
+            }
         }
     } else if (type == DT_REG) {
         stat(path, &statbuf);
@@ -235,6 +257,48 @@ MediaScanResult MediaScanner::doProcessDirectoryEntry(
     }
 
     return MEDIA_SCAN_RESULT_OK;
+}
+
+bool MediaScanner::isBDDirectory(char* bdDirectory)
+{
+    if(bdDirectory == NULL)
+        return false;
+
+    char path[PATH_MAX];
+    // BDMV Exist?
+    snprintf(path,PATH_MAX,"%s/BDMV",bdDirectory);
+    if(access(path, F_OK) != 0){
+        return false;
+    }
+
+    // STREAM Exist?
+    snprintf(path,PATH_MAX,"%s/BDMV/STREAM",bdDirectory);
+    if(access(path, F_OK) != 0){
+        snprintf(path,PATH_MAX,"%s/BACKUP/STREAM",bdDirectory);
+        if(access(path, F_OK) != 0){
+            return false;
+        }
+    }
+
+    // PLAYLIST Exist?
+    snprintf(path,PATH_MAX,"%s/BDMV/PLAYLIST",bdDirectory);
+    if(access(path, F_OK) != 0){
+        snprintf(path,PATH_MAX,"%s/BACKUP/PLAYLIST",bdDirectory);
+        if(access(path, F_OK) != 0){
+            return false;
+        }
+    }
+
+    // CLIPINF Exist?
+    snprintf(path,PATH_MAX,"%s/BDMV/CLIPINF",bdDirectory);
+    if(access(path, F_OK) != 0){
+        snprintf(path,PATH_MAX,"%s/BACKUP/CLIPINF",bdDirectory);
+        if(access(path, F_OK) != 0){
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 MediaAlbumArt *MediaAlbumArt::clone() {

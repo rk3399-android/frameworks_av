@@ -84,7 +84,8 @@ public:
      */
     static constexpr char const * const xmlFiles[] = {
             "vendor/etc/media_profiles_V1_0.xml",
-            "system/etc/media_profiles.xml"
+            "system/etc/media_profiles.xml",
+            "data/camera/media_profiles.xml"
             };
 
     /**

@@ -84,6 +84,10 @@ public:
     virtual status_t createInputSurface(
             sp<IGraphicBufferProducer> *bufferProducer,
             sp<IGraphicBufferSource> *bufferSource) = 0;
+
+    virtual size_t getLiveNodeSize() {
+        return 0;
+    }
 };
 
 class IOMXNode : public IInterface {

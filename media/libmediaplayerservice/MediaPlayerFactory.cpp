@@ -31,12 +31,33 @@
 
 #include "TestPlayerStub.h"
 #include "nuplayer/NuPlayerDriver.h"
+#include "MidiFile.h"
 
+#ifdef USE_FFPLAYER
+#include "FFPlayer.h"
+#endif
 namespace android {
 
 Mutex MediaPlayerFactory::sLock;
 MediaPlayerFactory::tFactoryMap MediaPlayerFactory::sFactoryMap;
 bool MediaPlayerFactory::sInitComplete = false;
+static status_t getFileName(int fd,String8 *FilePath)
+{
+    static ssize_t link_dest_size;
+    static char link_dest[PATH_MAX];
+    const char *ptr = NULL;
+    String8 path;
+    path.appendFormat("/proc/%d/fd/%d", getpid(), fd);
+    if ((link_dest_size = readlink(path.string(), link_dest, sizeof(link_dest)-1)) < 0) {
+        return errno;
+    } else {
+        link_dest[link_dest_size] = '\0';
+    }
+    path = link_dest;
+    ptr = path.string();
+    *FilePath = String8(ptr);
+    return OK;
+}
 
 status_t MediaPlayerFactory::registerFactory_l(IFactory* factory,
                                                player_type type) {
@@ -62,7 +83,21 @@ status_t MediaPlayerFactory::registerFactory_l(IFactory* factory,
 }
 
 static player_type getDefaultPlayerType() {
+#ifndef  USE_FFPLAYER
     return NU_PLAYER;
+#else
+    char value[PROPERTY_VALUE_MAX];
+    if (property_get("cts_gts.status", value, NULL)
+           && !strcasecmp("true", value)) {
+        return NU_PLAYER;
+    }
+    if (property_get("use_nuplayer", value, NULL)
+           && !strcasecmp("true", value)) {
+        return NU_PLAYER;
+    }
+
+    return FF_PLAYER;
+#endif
 }
 
 status_t MediaPlayerFactory::registerFactory(IFactory* factory,
@@ -76,10 +111,35 @@ void MediaPlayerFactory::unregisterFactory(player_type type) {
     sFactoryMap.removeItem(type);
 }
 
+#ifndef USE_FFPLAYER
 #define GET_PLAYER_TYPE_IMPL(a...)                      \
     Mutex::Autolock lock_(&sLock);                      \
                                                         \
-    player_type ret = STAGEFRIGHT_PLAYER;               \
+    player_type ret = NU_PLAYER;                        \
+    float bestScore = 0.0;                              \
+                                                        \
+    for (size_t i = 0; i < sFactoryMap.size(); ++i) {   \
+                                                        \
+        IFactory* v = sFactoryMap.valueAt(i);           \
+        float thisScore;                                \
+        CHECK(v != NULL);                               \
+        thisScore = v->scoreFactory(a, bestScore);      \
+        if (thisScore > bestScore) {                    \
+            ret = sFactoryMap.keyAt(i);                 \
+            bestScore = thisScore;                      \
+        }                                               \
+    }                                                   \
+                                                        \
+    if (0.0 == bestScore) {                             \
+        ret = getDefaultPlayerType();                   \
+    }                                                   \
+                                                        \
+    return ret;
+#else
+#define GET_PLAYER_TYPE_IMPL(a...)                      \
+    Mutex::Autolock lock_(&sLock);                      \
+                                                        \
+    player_type ret = FF_PLAYER;                        \
     float bestScore = 0.0;                              \
                                                         \
     for (size_t i = 0; i < sFactoryMap.size(); ++i) {   \
@@ -100,8 +160,34 @@ void MediaPlayerFactory::unregisterFactory(player_type type) {
                                                         \
     return ret;
 
+#endif
+
 player_type MediaPlayerFactory::getPlayerType(const sp<IMediaPlayer>& client,
                                               const char* url) {
+#ifdef USE_FFPLAYER
+    if(!strncasecmp("http://localhost:", url, 17)) {
+        return NU_PLAYER;
+    }
+    if (!strncasecmp("iptv://", url, 7)) {
+        return NU_PLAYER;
+    }
+
+    if (!strncasecmp("udpwimo", url, 7)) {
+        return NU_PLAYER;
+    }
+
+    if (!strncasecmp("DVBTV://", url, 8)) {
+        return NU_PLAYER;
+    }
+
+    if(strstr(url,".ogg")){
+        return NU_PLAYER;
+    }
+
+    if(strstr(url,".wvm")){
+       return NU_PLAYER;
+    }
+#endif
     GET_PLAYER_TYPE_IMPL(client, url);
 }
 
@@ -109,6 +195,25 @@ player_type MediaPlayerFactory::getPlayerType(const sp<IMediaPlayer>& client,
                                               int fd,
                                               int64_t offset,
                                               int64_t length) {
+#ifdef USE_FFPLAYER
+    String8 filePath;
+    getFileName(fd,&filePath);
+    if(strstr(filePath.string(),".ogg")){
+        return NU_PLAYER;
+    }
+
+    if(strstr(filePath.string(),".wvm")){
+        return NU_PLAYER;
+    }
+
+    if(strstr(filePath.string(),".mp3")){
+        return NU_PLAYER;
+    }
+
+    if(strstr(filePath.string(),".mid")){
+        return NU_PLAYER;
+    }
+#endif
     GET_PLAYER_TYPE_IMPL(client, fd, offset, length);
 }
 
@@ -126,7 +231,8 @@ player_type MediaPlayerFactory::getPlayerType(const sp<IMediaPlayer>& client,
 
 sp<MediaPlayerBase> MediaPlayerFactory::createPlayer(
         player_type playerType,
-        const sp<MediaPlayerBase::Listener> &listener,
+        const wp<IMediaPlayer> &client,
+        notify_callback_f notifyFunc,
         pid_t pid) {
     sp<MediaPlayerBase> p;
     IFactory* factory;
@@ -151,7 +257,7 @@ sp<MediaPlayerBase> MediaPlayerFactory::createPlayer(
 
     init_result = p->initCheck();
     if (init_result == NO_ERROR) {
-        p->setNotifyCallback(listener);
+        p->setNotifyCallback(client, notifyFunc);
     } else {
         ALOGE("Failed to create player object of type %d, initCheck failed"
               " (res = %d)", playerType, init_result);
@@ -238,6 +344,32 @@ class TestPlayerFactory : public MediaPlayerFactory::IFactory {
     }
 };
 
+#ifdef USE_FFPLAYER
+class FFPlayerFactory :public MediaPlayerFactory::IFactory {
+public:
+    virtual float scoreFactory(const sp<IMediaPlayer>& /*client*/,
+                                       const char* url,
+                                       float /*curScore*/){
+        static const float kOurScore = 0.9;
+        if (!strncasecmp("http://", url, 7)
+                || !strncasecmp("https://", url, 8)
+                || !strncasecmp("rtsp://", url, 7)){
+            char value[PROPERTY_VALUE_MAX];
+            if(property_get("cts_gts.status", value, NULL)
+                && !strcasecmp("true", value)){
+                return 0.0;
+            }
+            return kOurScore;
+        }
+        return 0.0;
+    }
+    virtual sp<MediaPlayerBase> createPlayer(pid_t /*pid*/) {
+        ALOGI(" createFFPlayer");
+        return new FFPlayer();
+    }
+
+};
+#endif
 void MediaPlayerFactory::registerBuiltinFactories() {
     Mutex::Autolock lock_(&sLock);
 
@@ -250,6 +382,11 @@ void MediaPlayerFactory::registerBuiltinFactories() {
     factory = new TestPlayerFactory();
     if (registerFactory_l(factory, TEST_PLAYER) != OK)
         delete factory;
+#ifdef USE_FFPLAYER
+    factory = new FFPlayerFactory();
+    if (registerFactory_l(factory,FF_PLAYER) != OK)
+	delete factory;
+#endif
 
     sInitComplete = true;
 }
